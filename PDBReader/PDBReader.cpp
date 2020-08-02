@@ -5,9 +5,12 @@
 #include <filesystem>
 
 int main() {
-    std::cout << "Hello World!\n" << std::endl;
+    // std::cout << "Hello World!\n" << std::endl;
 
-    auto ret = PDBReader::DownloadPDBForFile(L"C:\\Windows\\System32\\win32kfull.sys", L"Symbols");
+    PDBReader::COINIT(COINIT_APARTMENTTHREADED);
+
+    auto ret = PDBReader::DownloadPDBForFile(L"C:\\Windows\\System32\\ntoskrnl.exe", L"Symbols");
+
     if (!ret) {
         std::cout << "Download pdb failed\n" << std::endl;
     }
@@ -15,11 +18,170 @@ int main() {
         std::cout << "Download pdb succeed\n" << std::endl;
     }
 
+    size_t addr;
+    DWORD type;
+
+    PDBReader reader(L"C:\\Windows\\System32\\ntoskrnl.exe", L"Symbols");
+    
+    addr = reader.FindSymbol(L"NtOpenProcess", type);
+    std::cout << addr << ", " << type << std::endl;
+
+    addr = reader.FindFunction(L"NtOpenProcess");
+    std::cout << addr << std::endl;
+
+    addr = reader.FindConst(L"NtOpenProcess");
+    std::cout << addr << std::endl;
+
     system("pause");
 }
 
-PDBReader::PDBReader() {
-    ;
+PDBReader::PDBReader(std::wstring pdb_name) {
+    CComPtr<IDiaDataSource> pSource;
+    HRESULT hr;
+
+    hr = CreateDiaDataSourceWithoutComRegistration(&pSource);
+    if (FAILED(hr)) {
+        throw std::exception("Could not CoCreate CLSID_DiaSource. Register msdia80.dll.");
+    }
+
+    hr = pSource->loadDataFromPdb(pdb_name.c_str());
+    if (FAILED(hr)) {
+        throw std::exception("Could not load pdb file.");
+    }
+
+    hr = pSource->openSession(&this->pSession);
+    if (FAILED(hr)) {
+        throw std::exception("Could not open session.");
+    }
+
+    hr = pSession->get_globalScope(&this->pGlobal);
+    if (FAILED(hr)) {
+        throw std::exception("Could not get global scope.");
+    }
+}
+
+PDBReader::PDBReader(std::wstring executable_name, std::wstring search_path) {
+    CComPtr<IDiaDataSource> pSource;
+    HRESULT hr;
+
+    hr = CreateDiaDataSourceWithoutComRegistration(&pSource);
+    if (FAILED(hr)) {
+        throw std::exception("Could not CoCreate CLSID_DiaSource. Register msdia80.dll.");
+    }
+
+    // using format: srv*search_path* to treat target folder as a symbol cache and search it recursively
+    std::wstring search_str = std::filesystem::absolute(search_path);
+    search_str = L"srv*" + search_str + L"*";
+    hr = pSource->loadDataForExe(executable_name.c_str(), search_str.c_str(), 0);
+    if (FAILED(hr)) {
+        throw std::exception("Could not load pdb file.");
+    }
+
+    hr = pSource->openSession(&this->pSession);
+    if (FAILED(hr)) {
+        throw std::exception("Could not open session.");
+    }
+
+    hr = pSession->get_globalScope(&this->pGlobal);
+    if (FAILED(hr)) {
+        throw std::exception("Could not get global scope.");
+    }
+}
+
+size_t PDBReader::FindSymbol(std::wstring sym, DWORD& type) {
+    CComPtr<IDiaEnumSymbols> pEnumSymbols;
+    HRESULT hr;
+    type = SymTagEnum::SymTagNull;
+
+    hr = this->pGlobal->findChildren(SymTagEnum::SymTagNull, sym.c_str(), nsfCaseSensitive, &pEnumSymbols);
+    if (FAILED(hr)) {
+        return 0;
+    }
+
+    LONG count = 0;
+    hr = pEnumSymbols->get_Count(&count);
+    if (count != 1 || (FAILED(hr))) {
+        return 0;
+    }
+
+    CComPtr<IDiaSymbol> pSymbol;
+    ULONG celt = 1;
+    hr = pEnumSymbols->Next(1, &pSymbol, &celt);
+    if ((FAILED(hr)) || (celt != 1)) {
+        return 0;
+    }
+
+
+    // get symbols's type info
+    hr = pSymbol->get_symTag(&type);
+    if (FAILED(hr)) {
+        type = SymTagEnum::SymTagNull;
+        return 0;
+    }
+
+    // May we should use pSymbol->get_relativeVirtualAddress()? But this function expect a dword return value
+    // and I'm not sure whether it is correct for 64bit machine
+    ULONGLONG va = 0;
+    hr = pSymbol->get_virtualAddress(&va);
+    return va;
+}
+
+size_t PDBReader::FindConst(std::wstring const_name) {
+    CComPtr<IDiaEnumSymbols> pEnumSymbols;
+    HRESULT hr;
+
+    hr = this->pGlobal->findChildren(SymTagEnum::SymTagData, const_name.c_str(), nsfCaseSensitive, &pEnumSymbols);
+    if (FAILED(hr)) {
+        return 0;
+    }
+
+    LONG count = 0;
+    hr = pEnumSymbols->get_Count(&count);
+    if (count != 1 || (FAILED(hr))) {
+        return 0;
+    }
+
+    CComPtr<IDiaSymbol> pSymbol;
+    ULONG celt = 1;
+    hr = pEnumSymbols->Next(1, &pSymbol, &celt);
+    if ((FAILED(hr)) || (celt != 1)) {
+        return 0;
+    }
+
+    // May we should use pSymbol->get_relativeVirtualAddress()? But this function expect a dword return value
+    // and I'm not sure whether it is correct for 64bit machine
+    ULONGLONG va = 0;
+    hr = pSymbol->get_virtualAddress(&va);
+    return va;
+}
+
+size_t PDBReader::FindFunction(std::wstring func) {
+    CComPtr<IDiaEnumSymbols> pEnumSymbols;
+    HRESULT hr;
+
+    hr = this->pGlobal->findChildren(SymTagEnum::SymTagFunction, func.c_str(), nsfCaseSensitive, &pEnumSymbols);
+    if (FAILED(hr)) {
+        return 0;
+    }
+
+    LONG count = 0;
+    hr = pEnumSymbols->get_Count(&count);
+    if (count != 1 || (FAILED(hr))) {
+        return 0;
+    }
+
+    CComPtr<IDiaSymbol> pSymbol;
+    ULONG celt = 1;
+    hr = pEnumSymbols->Next(1, &pSymbol, &celt);
+    if ((FAILED(hr)) || (celt != 1)) {
+        return 0;
+    }
+
+    // May we should use pSymbol->get_relativeVirtualAddress()? But this function expect a dword return value
+    // and I'm not sure whether it is correct for 64bit machine
+    ULONGLONG va = 0;
+    hr = pSymbol->get_virtualAddress(&va);
+    return va;
 }
 
 HRESULT PDBReader::COINIT(DWORD init_flag) {
@@ -37,9 +199,9 @@ bool PDBReader::DownloadPDBForFile(std::wstring executable_name, std::wstring sy
 
     std::filesystem::path sym_cache_folder = std::filesystem::absolute(symbol_folder);
     std::wstring MS_SYMBOL_SERVER = L"https://msdl.microsoft.com/download/symbols";
-    std::wstring seachPath = std::wstring(L"srv*") + sym_cache_folder.c_str() + L"*" + MS_SYMBOL_SERVER;
+    std::wstring seach_path = std::wstring(L"srv*") + sym_cache_folder.c_str() + L"*" + MS_SYMBOL_SERVER;
 
-    hr = pSource->loadDataForExe(executable_name.c_str(), seachPath.c_str(), 0);
+    hr = pSource->loadDataForExe(executable_name.c_str(), seach_path.c_str(), 0);
     if (FAILED(hr)) {
         return false;
     }
