@@ -4,12 +4,14 @@
 #include "PDBReader.h"
 #include <filesystem>
 
+int TEST_CONST = 1;
+
 int main() {
     // std::cout << "Hello World!\n" << std::endl;
 
     PDBReader::COINIT(COINIT_APARTMENTTHREADED);
 
-    auto ret = PDBReader::DownloadPDBForFile(L"C:\\Windows\\System32\\ntoskrnl.exe", L"Symbols");
+    auto ret = PDBReader::DownloadPDBForFile(L"C:\\Windows\\System32\\win32kfull.sys", L"Symbols");
 
     if (!ret) {
         std::cout << "Download pdb failed\n" << std::endl;
@@ -21,16 +23,20 @@ int main() {
     size_t addr;
     DWORD type;
 
-    PDBReader reader(L"C:\\Windows\\System32\\ntoskrnl.exe", L"Symbols");
+    PDBReader reader(L"D:\\VisualStudioProjects\\PDBReader\\x64\\Debug\\PDBReader.pdb");
+    PDBReader reader2(L"C:\\Windows\\System32\\win32kfull.sys", L"Symbols");
     
-    addr = reader.FindSymbol(L"NtOpenProcess", type);
+    addr = reader.FindSymbol(L"TEST_CONST", type);
     std::cout << addr << ", " << type << std::endl;
 
-    addr = reader.FindFunction(L"NtOpenProcess");
+    addr = reader.FindFunction(L"PDBReader::DownloadPDBForFile");
     std::cout << addr << std::endl;
 
-    addr = reader.FindConst(L"NtOpenProcess");
+    addr = reader.FindConst(L"TEST_CONST");
     std::cout << addr << std::endl;
+
+    addr = reader2.FindSymbol(L"NtUserBuildHwndList", type);
+    std::cout << addr << ", " << type << std::endl;
 
     system("pause");
 }
